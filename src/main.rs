@@ -8,7 +8,9 @@
 /// - 2718281828459045235360287471352662497757247093699959574966967627
 use clap::{App, Arg};
 use std::collections::VecDeque;
+use std::fmt;
 use std::iter::Iterator;
+use std::ops::Add;
 
 fn main() {
     let matches = App::new("c1w1")
@@ -25,8 +27,14 @@ fn main() {
     let numbers: Vec<&str> = matches.values_of("numbers").expect("ERROR").collect();
     println!("{}", multiply(&numbers[0], &numbers[1]));
     // println!("{}", multiply("123456", "789123"));
+    println!(
+        "{}",
+        NumberStr::new("123123123") + NumberStr::new("999923123123")
+    );
 }
 
+// TODO: turn into a method on a struct `NumberStr`
+// TODO: implement karatsuba using `NumberStr` abstraction
 // want multiply to work even when `a` and `b` are of different lengths
 fn multiply(a: &str, b: &str) -> String {
     let debug_msg = format!("a = {}, b = {}", a, b);
@@ -64,9 +72,10 @@ fn multiply(a: &str, b: &str) -> String {
     z_mut.push_str(&base.to_string().replace("1", ""));
 
     println!("{}, {}, {}", &z0_mut, &z_mut, z1);
-    add(&add(&z0_mut, &z_mut), &z1.to_string())
+    (NumberStr::new(&z0_mut) + NumberStr::new(&z_mut) + NumberStr::new(&z1.to_string())).into()
 }
 
+#[derive(Debug, PartialEq)]
 struct Digit {
     character: char,
     digit: u32,
@@ -90,56 +99,102 @@ impl From<u32> for Digit {
     }
 }
 
-/// Add two numbers represented as strings and return a string.
-///
-/// This has the advantage of being able to operate numbers too large for built-in arithmetic
-/// operations
-fn add(a: &str, b: &str) -> String {
-    // TODO: implement adding of negative numbers //
-    // if larger is negative, tack '-' on at the end
-    // if only one is negative, larger + -1 * smaller
+#[derive(Debug, PartialEq)]
+struct NumberStr {
+    value: VecDeque<Digit>,
+}
 
-    let larger = if a.len() > b.len() { a } else { b };
-    let smaller = if a.len() > b.len() { b } else { a };
+impl NumberStr {
+    fn new(value: &str) -> NumberStr {
+        NumberStr {
+            value: value.chars().map(Digit::new).collect(),
+        }
+    }
 
-    let mut digits_l = larger.chars().map(Digit::new);
-    let mut digits_s = smaller.chars().map(Digit::new);
+    fn len(&self) -> usize {
+        self.value.len()
+    }
+}
 
-    let mut carry = 0;
-    let mut summed: VecDeque<char> = VecDeque::new();
-    let mut x_digit: Digit;
+impl From<&str> for NumberStr {
+    fn from(s: &str) -> Self {
+        Self::new(s)
+    }
+}
 
-    while let Some(c_l) = digits_l.next_back() {
-        #[allow(unused_assignments)]
-        let mut x = 0;
+impl Into<String> for NumberStr {
+    fn into(self) -> String {
+        // available bc implemented `Display`
+        self.to_string()
+    }
+}
 
-        if let Some(c_s) = digits_s.next_back() {
-            x = c_l.digit + c_s.digit + carry;
+impl fmt::Display for NumberStr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.value.iter().map(|d| d.character).collect::<String>()
+        )
+    }
+}
+
+impl Add for NumberStr {
+    type Output = Self;
+
+    /// Add two numbers represented as strings and return a string.
+    ///
+    /// This has the advantage of being able to operate numbers too large for built-in arithmetic
+    /// operations
+    fn add(self, other: Self) -> Self {
+        // TODO: implement adding of negative numbers //
+        // if larger is negative, tack '-' on at the end
+        // if only one is negative, larger + -1 * smaller
+        let larger = if self.len() > other.len() {
+            &self
         } else {
-            x = c_l.digit + carry;
+            &other
+        };
+        let smaller = if self.len() > other.len() {
+            &other
+        } else {
+            &self
+        };
+
+        let mut value: VecDeque<Digit> = VecDeque::new();
+        let mut x;
+        let mut carry = 0;
+        let mut large_iter = larger.value.iter();
+        let mut small_iter = smaller.value.iter();
+
+        while let Some(digit_l) = large_iter.next_back() {
+            if let Some(digit_s) = small_iter.next_back() {
+                x = digit_l.digit + digit_s.digit + carry;
+            } else {
+                x = digit_l.digit + carry;
+            }
+            // used carry value above
+            carry = 0;
+
+            // new carry
+            if x > 9 {
+                carry = 1;
+                x -= 10;
+            }
+
+            value.push_front(Digit::from(x));
         }
-        // already used carry above
-        carry = 0;
-
-        if x >= 10 {
-            carry = 1;
-            x -= 10;
+        if carry > 0 {
+            value.push_front(Digit::new('1'));
         }
-        x_digit = Digit::from(x);
-        summed.push_front(x_digit.character);
-    }
 
-    // if we still have value in carry, append to number
-    if carry > 0 {
-        summed.push_front('1');
+        NumberStr { value }
     }
-
-    summed.iter().collect()
 }
 
 #[cfg(test)]
 mod test {
-    use super::{add, multiply};
+    use super::{multiply, NumberStr};
 
     #[test]
     fn multiply_small_test() {
@@ -163,37 +218,52 @@ mod test {
 
     #[test]
     fn add_single_digit_with_carry_test() {
-        assert_eq!("10", add("4", "6"))
+        assert_eq!(
+            NumberStr::new("10"),
+            NumberStr::new("4") + NumberStr::new("6")
+        )
     }
 
     #[test]
     fn add_different_digit_counts_test() {
-        assert_eq!("8895", add("6", "8889"))
+        assert_eq!(
+            NumberStr::new("8895"),
+            NumberStr::new("6") + NumberStr::new("8889")
+        );
     }
 
     #[test]
     fn add_two_negative_test() {
-        assert_eq!("-21", add("-5", "-16"));
+        assert_eq!(
+            NumberStr::new("-21"),
+            NumberStr::new("-5") + NumberStr::new("-16")
+        );
     }
 
     #[test]
     fn add_mixed_sign_larger_positive_test() {
-        assert_eq!("5", add("-122", "127"));
+        assert_eq!(
+            NumberStr::new("5"),
+            NumberStr::new("-122") + NumberStr::new("127")
+        );
     }
 
     #[test]
     fn add_mixed_sign_larger_negative_test() {
-        assert_eq!("-5", add("122", "-127"));
+        assert_eq!(
+            NumberStr::new("-5"),
+            NumberStr::new("122") + NumberStr::new("-127")
+        );
     }
 
     #[test]
     fn add_oom_numbers_test() {
         assert_eq!(
-            "5859874482048838473822930854632165381954416493075065395941912219",
-            add(
-                "3141592653589793238462643383279502884197169399375105820974944592",
-                "2718281828459045235360287471352662497757247093699959574966967627"
-            )
+            NumberStr::new("5859874482048838473822930854632165381954416493075065395941912219"),
+            NumberStr::new("3141592653589793238462643383279502884197169399375105820974944592")
+                + NumberStr::new(
+                    "2718281828459045235360287471352662497757247093699959574966967627"
+                )
         )
     }
 }
