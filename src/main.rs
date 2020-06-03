@@ -7,10 +7,11 @@
 /// - 3141592653589793238462643383279502884197169399375105820974944592
 /// - 2718281828459045235360287471352662497757247093699959574966967627
 use clap::{App, Arg};
+use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::fmt;
 use std::iter::Iterator;
-use std::ops::Add;
+use std::ops::{Add, Mul};
 
 fn main() {
     let matches = App::new("c1w1")
@@ -27,10 +28,189 @@ fn main() {
     let numbers: Vec<&str> = matches.values_of("numbers").expect("ERROR").collect();
     println!("{}", multiply(&numbers[0], &numbers[1]));
     // println!("{}", multiply("123456", "789123"));
-    println!(
-        "{}",
-        NumberStr::new("123123123") + NumberStr::new("999923123123")
-    );
+}
+
+#[derive(Debug, PartialEq)]
+struct Digit {
+    character: char,
+    digit: u32,
+}
+
+impl Digit {
+    fn new(character: char) -> Digit {
+        Digit {
+            character,
+            digit: character.to_digit(10).unwrap(),
+        }
+    }
+}
+
+impl From<u32> for Digit {
+    fn from(digit: u32) -> Digit {
+        let digit_str = digit.to_string();
+        assert!(digit_str.len() == 1);
+        let character = digit_str.chars().last().unwrap();
+        Digit { character, digit }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct NumberStr {
+    value: VecDeque<Digit>,
+    positive: bool,
+}
+
+impl NumberStr {
+    fn new(value: &str) -> NumberStr {
+        let mut characters = value.chars().peekable();
+        let positive = characters.peek().unwrap() != &'-';
+        if !positive {
+            characters.next();
+        }
+        NumberStr {
+            value: characters.map(Digit::new).collect(),
+            positive,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.value.len()
+    }
+}
+
+impl From<&str> for NumberStr {
+    fn from(s: &str) -> Self {
+        Self::new(s)
+    }
+}
+
+impl Into<String> for NumberStr {
+    fn into(self) -> String {
+        // available bc implemented `Display`
+        self.to_string()
+    }
+}
+
+impl fmt::Display for NumberStr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let base = self.value.iter().map(|d| d.character).collect::<String>();
+        let to_print = if self.positive {
+            base
+        } else {
+            let mut to_print = String::from("-");
+            to_print.push_str(&base);
+            to_print
+        };
+        write!(f, "{}", to_print,)
+    }
+}
+
+impl PartialOrd for NumberStr {
+    /// Attempt to match on length, but if same length, then compare digits left-to-right.
+    fn partial_cmp(&self, other: &NumberStr) -> Option<Ordering> {
+        if self.positive && !other.positive {
+            return Some(Ordering::Greater);
+        }
+        if !self.positive && other.positive {
+            return Some(Ordering::Less);
+        }
+        let invert = !self.positive && !other.positive;
+        match self.len().cmp(&other.len()) {
+            Ordering::Greater => {
+                if !invert {
+                    Some(Ordering::Greater)
+                } else {
+                    Some(Ordering::Less)
+                }
+            }
+            Ordering::Less => {
+                if !invert {
+                    Some(Ordering::Less)
+                } else {
+                    Some(Ordering::Greater)
+                }
+            }
+            Ordering::Equal => {
+                for (a, b) in self.value.iter().zip(other.value.iter()) {
+                    match a.digit.cmp(&b.digit) {
+                        Ordering::Greater => {
+                            return if !invert {
+                                Some(Ordering::Greater)
+                            } else {
+                                Some(Ordering::Less)
+                            }
+                        }
+                        Ordering::Less => {
+                            return if !invert {
+                                Some(Ordering::Less)
+                            } else {
+                                Some(Ordering::Greater)
+                            }
+                        }
+                        Ordering::Equal => continue,
+                    }
+                }
+                Some(Ordering::Equal)
+            }
+        }
+    }
+}
+
+impl Add for NumberStr {
+    type Output = Self;
+
+    /// Add two numbers represented as strings and return a string.
+    ///
+    /// This has the advantage of being able to operate numbers too large for built-in arithmetic
+    /// operations
+    fn add(self, other: Self) -> Self {
+        // TODO: implement adding of negative numbers //
+        // if larger is negative, tack '-' on at the end
+        // if only one is negative, larger + -1 * smaller
+        let larger = if self > other { &self } else { &other };
+        let smaller = if self > other { &other } else { &self };
+
+        let mut value: VecDeque<Digit> = VecDeque::new();
+        let mut x;
+        let mut carry = 0;
+        let mut large_iter = larger.value.iter();
+        let mut small_iter = smaller.value.iter();
+
+        while let Some(digit_l) = large_iter.next_back() {
+            if let Some(digit_s) = small_iter.next_back() {
+                x = digit_l.digit + digit_s.digit + carry;
+            } else {
+                x = digit_l.digit + carry;
+            }
+            // used carry value above
+            carry = 0;
+
+            // new carry
+            if x > 9 {
+                carry = 1;
+                x -= 10;
+            }
+
+            value.push_front(Digit::from(x));
+        }
+        if carry > 0 {
+            value.push_front(Digit::new('1'));
+        }
+
+        NumberStr {
+            value,
+            positive: true,
+        }
+    }
+}
+
+impl Mul for NumberStr {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self {
+        // TODO implement this after completing `add`
+        unimplemented!()
+    }
 }
 
 // TODO: turn into a method on a struct `NumberStr`
@@ -75,126 +255,34 @@ fn multiply(a: &str, b: &str) -> String {
     (NumberStr::new(&z0_mut) + NumberStr::new(&z_mut) + NumberStr::new(&z1.to_string())).into()
 }
 
-#[derive(Debug, PartialEq)]
-struct Digit {
-    character: char,
-    digit: u32,
-}
-
-impl Digit {
-    fn new(character: char) -> Digit {
-        Digit {
-            character,
-            digit: character.to_digit(10).unwrap(),
-        }
-    }
-}
-
-impl From<u32> for Digit {
-    fn from(digit: u32) -> Digit {
-        let digit_str = digit.to_string();
-        assert!(digit_str.len() == 1);
-        let character = digit_str.chars().last().unwrap();
-        Digit { character, digit }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-struct NumberStr {
-    value: VecDeque<Digit>,
-}
-
-impl NumberStr {
-    fn new(value: &str) -> NumberStr {
-        NumberStr {
-            value: value.chars().map(Digit::new).collect(),
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.value.len()
-    }
-}
-
-impl From<&str> for NumberStr {
-    fn from(s: &str) -> Self {
-        Self::new(s)
-    }
-}
-
-impl Into<String> for NumberStr {
-    fn into(self) -> String {
-        // available bc implemented `Display`
-        self.to_string()
-    }
-}
-
-impl fmt::Display for NumberStr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            self.value.iter().map(|d| d.character).collect::<String>()
-        )
-    }
-}
-
-impl Add for NumberStr {
-    type Output = Self;
-
-    /// Add two numbers represented as strings and return a string.
-    ///
-    /// This has the advantage of being able to operate numbers too large for built-in arithmetic
-    /// operations
-    fn add(self, other: Self) -> Self {
-        // TODO: implement adding of negative numbers //
-        // if larger is negative, tack '-' on at the end
-        // if only one is negative, larger + -1 * smaller
-        let larger = if self.len() > other.len() {
-            &self
-        } else {
-            &other
-        };
-        let smaller = if self.len() > other.len() {
-            &other
-        } else {
-            &self
-        };
-
-        let mut value: VecDeque<Digit> = VecDeque::new();
-        let mut x;
-        let mut carry = 0;
-        let mut large_iter = larger.value.iter();
-        let mut small_iter = smaller.value.iter();
-
-        while let Some(digit_l) = large_iter.next_back() {
-            if let Some(digit_s) = small_iter.next_back() {
-                x = digit_l.digit + digit_s.digit + carry;
-            } else {
-                x = digit_l.digit + carry;
-            }
-            // used carry value above
-            carry = 0;
-
-            // new carry
-            if x > 9 {
-                carry = 1;
-                x -= 10;
-            }
-
-            value.push_front(Digit::from(x));
-        }
-        if carry > 0 {
-            value.push_front(Digit::new('1'));
-        }
-
-        NumberStr { value }
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::{multiply, NumberStr};
+
+    #[test]
+    fn cmp_positive_larger_test() {
+        assert!(NumberStr::new("1000") > NumberStr::new("53"));
+    }
+
+    #[test]
+    fn cmp_positive_smaller_same_len_test() {
+        assert!(NumberStr::new("8111") < NumberStr::new("8112"));
+    }
+
+    #[test]
+    fn cmp_smaller_one_negative_test() {
+        assert!(NumberStr::new("-50") < NumberStr::new("8"));
+    }
+
+    #[test]
+    fn cmp_both_negative_larger_test() {
+        assert!(NumberStr::new("-50") > NumberStr::new("-800"));
+    }
+
+    #[test]
+    fn cmp_both_negative_larger_same_len_test() {
+        assert!(NumberStr::new("-505") > NumberStr::new("-800"));
+    }
 
     #[test]
     fn multiply_small_test() {
