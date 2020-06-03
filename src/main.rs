@@ -1,11 +1,8 @@
-/// To get the most out of this assignment, your program should restrict itself to multiplying only
-/// pairs of single-digit numbers. You can implement the grade-school algorithm if you want, but to
-/// get the most out of the assignment you'll want to implement recursive integer multiplication
-/// and/or Karatsuba's algorithm.
+/// This is a CLI application for multiplying two arbitrarily large numbers.
 ///
-/// Assignment asks for product of:
-/// - 3141592653589793238462643383279502884197169399375105820974944592
-/// - 2718281828459045235360287471352662497757247093699959574966967627
+/// e.g., what is the product of:
+/// 3141592653589793238462643383279502884197169399375105820974944592
+/// x 2718281828459045235360287471352662497757247093699959574966967627
 use clap::{App, Arg};
 use std::cmp::Ordering;
 use std::collections::VecDeque;
@@ -34,11 +31,11 @@ fn main() {
     // TODO there has to be a better way, but `NumberStr::Mul` takes ownership so refactoring to
     // take references seems tricky.
     let first = numbers.remove(0);
-    let second = numbers.remove(1);
-    println!("{:?}, {:?}", first, second);
+    let second = numbers.remove(0);
     println!("{}", first * second);
 }
 
+/// `Struct` containing both a char representation of a digit and the digit itself (`u32`)
 #[derive(Debug, PartialEq)]
 struct Digit {
     character: char,
@@ -63,6 +60,9 @@ impl From<u32> for Digit {
     }
 }
 
+/// `Struct` representing a positive or negative integer.
+///
+/// Stores a `VecDeque` of `Digit`s and the sign of the number.
 #[derive(Debug, PartialEq)]
 struct NumberStr {
     value: VecDeque<Digit>,
@@ -96,7 +96,7 @@ impl NumberStr {
             v.push_back(Digit::new('0'));
             NumberStr {
                 value: v,
-                positive: false,
+                positive: true,
             }
         } else {
             NumberStr {
@@ -124,6 +124,15 @@ impl NumberStr {
 
     /// Order pair of `NumberStr` instances based on length in ascending order
     fn order<'a>(&'a self, other: &'a Self) -> (&'a Self, &'a Self) {
+        if self.len() == other.len() {
+            for (a, b) in self.value.iter().zip(other.value.iter()) {
+                match a.digit.cmp(&b.digit) {
+                    Ordering::Greater => return (other, self),
+                    Ordering::Less => return (self, other),
+                    Ordering::Equal => continue,
+                }
+            }
+        }
         if self.len() > other.len() {
             (other, self)
         } else {
@@ -132,6 +141,7 @@ impl NumberStr {
     }
 
     fn split_at(mut self, idx: usize) -> (Self, Self) {
+        assert!(self.len() > idx);
         let positive = self.positive;
         let new_vd = self.value.split_off(idx);
         self.value.shrink_to_fit();
@@ -279,21 +289,57 @@ impl Add for NumberStr {
     }
 }
 
+/// Implements multiplication using Karatsuba's Algorithm
 #[allow(suspicious_arithmetic_impl)]
 impl Mul for NumberStr {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
-        // FIXME: base case
-        // if one is len 1, then split will yield...???
-        println!("{:?}, {:?}", self, rhs);
-
-        if self.len() == 1 && rhs.len() == 1 {
-            return NumberStr::new(
-                &(self.value.front().unwrap().digit * rhs.value.front().unwrap().digit).to_string(),
-            );
+        // base case: when at least one argument is single-digit
+        match (self.len() == 1, rhs.len() == 1) {
+            (true, true) => {
+                let a = self.value.front().unwrap().digit as i32;
+                let b = rhs.value.front().unwrap().digit as i32;
+                let sign = if rhs.positive == self.positive { 1 } else { -1 };
+                return NumberStr::new(&(a * b * sign).to_string());
+            }
+            (true, false) => {
+                let multiplier = self.value.front().unwrap().digit as i32;
+                let sign = if rhs.positive == self.positive { 1 } else { -1 };
+                let len = rhs.len() as u32 - 1;
+                let result = NumberStr::new(
+                    &rhs.value
+                        .iter()
+                        .enumerate()
+                        .map(|(i, d)| {
+                            d.digit as i32 * multiplier * sign * 10i32.pow(len - i as u32)
+                        })
+                        .sum::<i32>()
+                        .to_string(),
+                );
+                return result;
+            }
+            (false, true) => {
+                let multiplier = rhs.value.front().unwrap().digit as i32;
+                let sign = if rhs.positive == self.positive { 1 } else { -1 };
+                let len = self.len() as u32 - 1;
+                let result = NumberStr::new(
+                    &self
+                        .value
+                        .iter()
+                        .enumerate()
+                        .map(|(i, d)| {
+                            d.digit as i32 * multiplier * sign * 10i32.pow(len - i as u32)
+                        })
+                        .sum::<i32>()
+                        .to_string(),
+                );
+                return result;
+            }
+            (false, false) => {}
         }
 
+        // figure out where to split the integers
         let mid = midpoint(self.len(), rhs.len());
         let mut b: VecDeque<Digit> = VecDeque::new();
         let mut b2: VecDeque<Digit> = VecDeque::new();
@@ -311,15 +357,14 @@ impl Mul for NumberStr {
 
         // calculate z0, z1, z2
         let mut z0 = a0.clone() * b0.clone();
-        let mut z1 = a1.clone() * b1.clone();
-        let z2 =
-            (a0 + a1) * (b0 + b1) + z0.clone() + z0.clone().flip_sign() + z1.clone().flip_sign();
+        let z1 = a1.clone() * b1.clone();
+        let mut z2 = ((a0 + a1) * (b0 + b1)) + z0.clone().flip_sign() + z1.clone().flip_sign();
 
         // add base
         z0.value.append(&mut b2);
-        z1.value.append(&mut b);
+        z2.value.append(&mut b);
 
-        z0 + z1 + z2
+        z0 + z2 + z1
     }
 }
 
@@ -335,48 +380,6 @@ fn midpoint(len1: usize, len2: usize) -> usize {
     (shorter_f * ratio).min(max_f).floor() as usize
 }
 
-// TODO: turn into a method on a struct `NumberStr`
-// TODO: implement karatsuba using `NumberStr` abstraction
-// want multiply to work even when `a` and `b` are of different lengths
-fn multiply(a: &str, b: &str) -> String {
-    let debug_msg = format!("a = {}, b = {}", a, b);
-    // println!("{}", &debug_msg);
-
-    // determine base
-    // for now, hardcode base 10^3, and if either input < 10^3, just use built-in multiplication
-    if a.replace("-", "").len() < 4 || b.replace("-", "").len() < 4 {
-        return (a.parse::<i128>().unwrap() * b.parse::<i128>().unwrap()).to_string();
-    }
-    let b_pow = 3;
-    let base = 10i128.pow(b_pow);
-
-    // convert inputs into: a0, a1, b0, b1
-    let (a0, a1) = a.split_at(a.len() - b_pow as usize);
-    let (b0, b1) = b.split_at(b.len() - b_pow as usize);
-
-    // calculate z0, z1, and with these, z'
-    let z0 = multiply(a0, b0).parse::<i128>().expect(&debug_msg);
-    let z1 = multiply(a1, b1).parse::<i128>().expect(&debug_msg);
-    let z = multiply(
-        &(a0.parse::<i128>().unwrap() + a1.parse::<i128>().expect(&debug_msg)).to_string(),
-        &(b0.parse::<i128>().unwrap() + b1.parse::<i128>().expect(&debug_msg)).to_string(),
-    )
-    .parse::<i128>()
-    .expect(&debug_msg)
-        - z0
-        - z1;
-
-    // calculate result
-    let mut z0_mut = z0.to_string();
-    z0_mut.push_str(&base.pow(2).to_string().replace("1", ""));
-
-    let mut z_mut = z.to_string();
-    z_mut.push_str(&base.to_string().replace("1", ""));
-
-    println!("{}, {}, {}", &z0_mut, &z_mut, z1);
-    (NumberStr::new(&z0_mut) + NumberStr::new(&z_mut) + NumberStr::new(&z1.to_string())).into()
-}
-
 #[cfg(test)]
 mod test {
     use super::{midpoint, Digit, NumberStr, VecDeque};
@@ -389,6 +392,12 @@ mod test {
     #[test]
     fn new_numberstr_empty_string_test() {
         assert_eq!(NumberStr::new("0"), NumberStr::new(""));
+        assert_eq!("0", NumberStr::new("").to_string());
+    }
+
+    #[test]
+    fn new_numberstr_zero_string_test() {
+        assert_eq!("0", NumberStr::new("0").to_string());
     }
 
     #[test]
@@ -464,6 +473,21 @@ mod test {
             NumberStr::new("-5").to_string(),
             (NumberStr::new("122") + NumberStr::new("-127")).to_string()
         );
+    }
+
+    #[test]
+    fn add_three_mixed_signs_test() {
+        assert_eq!(
+            "7",
+            (NumberStr::new("60") + NumberStr::new("-8") + NumberStr::new("-45")).to_string()
+        );
+    }
+
+    #[test]
+    fn add_flip_sign_then_add_test() {
+        let a = NumberStr::new("55");
+        let b = NumberStr::new("2").flip_sign();
+        assert_eq!("53", (a + b).to_string());
     }
 
     #[test]
