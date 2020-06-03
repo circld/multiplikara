@@ -25,9 +25,18 @@ fn main() {
         )
         .get_matches();
 
-    let numbers: Vec<&str> = matches.values_of("numbers").expect("ERROR").collect();
-    println!("{}", multiply(&numbers[0], &numbers[1]));
-    // println!("{}", multiply("123456", "789123"));
+    let mut numbers: Vec<NumberStr> = matches
+        .values_of("numbers")
+        .expect("ERROR")
+        .map(NumberStr::new)
+        .collect();
+
+    // TODO there has to be a better way, but `NumberStr::Mul` takes ownership so refactoring to
+    // take references seems tricky.
+    let first = numbers.remove(0);
+    let second = numbers.remove(1);
+    println!("{:?}, {:?}", first, second);
+    println!("{}", first * second);
 }
 
 #[derive(Debug, PartialEq)]
@@ -61,20 +70,83 @@ struct NumberStr {
 }
 
 impl NumberStr {
-    fn new(value: &str) -> NumberStr {
+    fn new(value: &str) -> Self {
         let mut characters = value.chars().peekable();
-        let positive = characters.peek().unwrap() != &'-';
+        let positive = match characters.peek() {
+            Some(&v) => v != '-',
+            None => false,
+        };
         if !positive {
+            // if None branch above (iterator exhausted), this returns None
             characters.next();
         }
-        NumberStr {
-            value: characters.map(Digit::new).collect(),
-            positive,
+
+        // consume leading zeroes
+        // n.b., `take_while` consumes first non-match :facepalm:
+        while let Some(&d) = characters.peek() {
+            if d != '0' {
+                break;
+            }
+            characters.next();
+        }
+
+        // no digits left!
+        if characters.peek().is_none() {
+            let mut v = VecDeque::new();
+            v.push_back(Digit::new('0'));
+            NumberStr {
+                value: v,
+                positive: false,
+            }
+        } else {
+            NumberStr {
+                value: characters.map(Digit::new).collect(),
+                positive,
+            }
         }
     }
 
     fn len(&self) -> usize {
         self.value.len()
+    }
+
+    /// Create a `NumberStr` instance from a `VecDeque` and an indicator whether positive
+    fn make(value: VecDeque<Digit>, positive: bool) -> Self {
+        let value_str: String = value.iter().map(|d| d.character).collect();
+        if !positive {
+            let mut v = String::from("-");
+            v.push_str(&value_str);
+            NumberStr::new(&v)
+        } else {
+            NumberStr::new(&value_str)
+        }
+    }
+
+    /// Order pair of `NumberStr` instances based on length in ascending order
+    fn order<'a>(&'a self, other: &'a Self) -> (&'a Self, &'a Self) {
+        if self.len() > other.len() {
+            (other, self)
+        } else {
+            (self, other)
+        }
+    }
+
+    fn split_at(mut self, idx: usize) -> (Self, Self) {
+        let positive = self.positive;
+        let new_vd = self.value.split_off(idx);
+        self.value.shrink_to_fit();
+        (self, NumberStr::make(new_vd, positive))
+    }
+
+    fn flip_sign(mut self) -> Self {
+        self.positive = !self.positive;
+        self
+    }
+}
+
+impl Clone for NumberStr {
+    fn clone(&self) -> Self {
+        Self::new(&self.to_string())
     }
 }
 
@@ -93,7 +165,7 @@ impl Into<String> for NumberStr {
 
 impl fmt::Display for NumberStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let base = self.value.iter().map(|d| d.character).collect::<String>();
+        let base: String = self.value.iter().map(|d| d.character).collect();
         let to_print = if self.positive {
             base
         } else {
@@ -107,7 +179,7 @@ impl fmt::Display for NumberStr {
 
 impl PartialOrd for NumberStr {
     /// Attempt to match on length, but if same length, then compare digits left-to-right.
-    fn partial_cmp(&self, other: &NumberStr) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         if self.positive && !other.positive {
             return Some(Ordering::Greater);
         }
@@ -164,11 +236,13 @@ impl Add for NumberStr {
     /// This has the advantage of being able to operate numbers too large for built-in arithmetic
     /// operations
     fn add(self, other: Self) -> Self {
-        // TODO: implement adding of negative numbers //
-        // if larger is negative, tack '-' on at the end
-        // if only one is negative, larger + -1 * smaller
-        let larger = if self > other { &self } else { &other };
-        let smaller = if self > other { &other } else { &self };
+        let invert = if self.positive != other.positive {
+            -1
+        } else {
+            1
+        };
+
+        let (smaller, larger) = self.order(&other);
 
         let mut value: VecDeque<Digit> = VecDeque::new();
         let mut x;
@@ -178,9 +252,9 @@ impl Add for NumberStr {
 
         while let Some(digit_l) = large_iter.next_back() {
             if let Some(digit_s) = small_iter.next_back() {
-                x = digit_l.digit + digit_s.digit + carry;
+                x = digit_l.digit as i32 + invert * (digit_s.digit as i32 + carry);
             } else {
-                x = digit_l.digit + carry;
+                x = digit_l.digit as i32 + invert * carry;
             }
             // used carry value above
             carry = 0;
@@ -190,27 +264,75 @@ impl Add for NumberStr {
                 carry = 1;
                 x -= 10;
             }
+            if x < 0 {
+                carry = 1;
+                x += 10;
+            }
 
-            value.push_front(Digit::from(x));
+            value.push_front(Digit::from(x as u32));
         }
         if carry > 0 {
             value.push_front(Digit::new('1'));
         }
 
-        NumberStr {
-            value,
-            positive: true,
-        }
+        NumberStr::make(value, larger.positive)
     }
 }
 
+#[allow(suspicious_arithmetic_impl)]
 impl Mul for NumberStr {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self {
-        // TODO implement this after completing `add`
-        unimplemented!()
+        // FIXME: base case
+        // if one is len 1, then split will yield...???
+        println!("{:?}, {:?}", self, rhs);
+
+        if self.len() == 1 && rhs.len() == 1 {
+            return NumberStr::new(
+                &(self.value.front().unwrap().digit * rhs.value.front().unwrap().digit).to_string(),
+            );
+        }
+
+        let mid = midpoint(self.len(), rhs.len());
+        let mut b: VecDeque<Digit> = VecDeque::new();
+        let mut b2: VecDeque<Digit> = VecDeque::new();
+        for i in 0..(2 * mid) {
+            b2.push_front(Digit::new('0'));
+            if i < mid {
+                b.push_front(Digit::new('0'));
+            }
+        }
+
+        // calculate a0, a1, b0, b1
+        let (len_s, len_r) = (self.len(), rhs.len());
+        let (a0, a1) = self.split_at(len_s - mid);
+        let (b0, b1) = rhs.split_at(len_r - mid);
+
+        // calculate z0, z1, z2
+        let mut z0 = a0.clone() * b0.clone();
+        let mut z1 = a1.clone() * b1.clone();
+        let z2 =
+            (a0 + a1) * (b0 + b1) + z0.clone() + z0.clone().flip_sign() + z1.clone().flip_sign();
+
+        // add base
+        z0.value.append(&mut b2);
+        z1.value.append(&mut b);
+
+        z0 + z1 + z2
     }
+}
+
+fn midpoint(len1: usize, len2: usize) -> usize {
+    let longer = if len1 > len2 { len1 } else { len2 };
+    let shorter = if len1 < len2 { len1 } else { len2 };
+
+    let theta = (longer as f32 - shorter as f32 + 1.) / longer as f32;
+    let ratio = 2f32.powf(theta - 1.);
+    let shorter_f = shorter as f32;
+    let max_f = (shorter - 1) as f32;
+
+    (shorter_f * ratio).min(max_f).floor() as usize
 }
 
 // TODO: turn into a method on a struct `NumberStr`
@@ -257,7 +379,27 @@ fn multiply(a: &str, b: &str) -> String {
 
 #[cfg(test)]
 mod test {
-    use super::{multiply, NumberStr};
+    use super::{midpoint, Digit, NumberStr, VecDeque};
+
+    #[test]
+    fn new_numberstr_test() {
+        assert_eq!("-1234", NumberStr::new("-1234").to_string());
+    }
+
+    #[test]
+    fn new_numberstr_empty_string_test() {
+        assert_eq!(NumberStr::new("0"), NumberStr::new(""));
+    }
+
+    #[test]
+    fn new_number_str_from_collection_test() {
+        let mut v: VecDeque<Digit> = VecDeque::new();
+        v.push_back(Digit::new('1'));
+        v.push_back(Digit::new('2'));
+        v.push_back(Digit::new('3'));
+        v.push_back(Digit::new('4'));
+        assert_eq!("-1234", NumberStr::make(v, false).to_string());
+    }
 
     #[test]
     fn cmp_positive_larger_test() {
@@ -285,73 +427,114 @@ mod test {
     }
 
     #[test]
-    fn multiply_small_test() {
-        assert_eq!(String::from("1024"), multiply("64", "16"))
-    }
-
-    #[test]
-    fn multiply_large_test() {
-        assert_eq!("97421969088", multiply("123456", "789123"))
-    }
-
-    #[test]
-    fn multiply_one_negative_test() {
-        assert!(multiply("1335", "-884").parse::<i32>().unwrap() < 0)
-    }
-
-    #[test]
-    fn multiply_two_negative_test() {
-        assert!(multiply("-13335496", "-999988").parse::<i128>().unwrap() > 0)
-    }
-
-    #[test]
     fn add_single_digit_with_carry_test() {
         assert_eq!(
-            NumberStr::new("10"),
-            NumberStr::new("4") + NumberStr::new("6")
+            NumberStr::new("10").to_string(),
+            (NumberStr::new("4") + NumberStr::new("6")).to_string()
         )
     }
 
     #[test]
     fn add_different_digit_counts_test() {
         assert_eq!(
-            NumberStr::new("8895"),
-            NumberStr::new("6") + NumberStr::new("8889")
+            NumberStr::new("8895").to_string(),
+            (NumberStr::new("6") + NumberStr::new("8889")).to_string()
         );
     }
 
     #[test]
     fn add_two_negative_test() {
         assert_eq!(
-            NumberStr::new("-21"),
-            NumberStr::new("-5") + NumberStr::new("-16")
+            NumberStr::new("-21").to_string(),
+            (NumberStr::new("-5") + NumberStr::new("-16")).to_string()
         );
     }
 
     #[test]
     fn add_mixed_sign_larger_positive_test() {
         assert_eq!(
-            NumberStr::new("5"),
-            NumberStr::new("-122") + NumberStr::new("127")
+            NumberStr::new("5").to_string(),
+            (NumberStr::new("-122") + NumberStr::new("127")).to_string()
         );
     }
 
     #[test]
     fn add_mixed_sign_larger_negative_test() {
         assert_eq!(
-            NumberStr::new("-5"),
-            NumberStr::new("122") + NumberStr::new("-127")
+            NumberStr::new("-5").to_string(),
+            (NumberStr::new("122") + NumberStr::new("-127")).to_string()
         );
     }
 
     #[test]
     fn add_oom_numbers_test() {
         assert_eq!(
-            NumberStr::new("5859874482048838473822930854632165381954416493075065395941912219"),
-            NumberStr::new("3141592653589793238462643383279502884197169399375105820974944592")
+            NumberStr::new("5859874482048838473822930854632165381954416493075065395941912219")
+                .to_string(),
+            (NumberStr::new("3141592653589793238462643383279502884197169399375105820974944592")
                 + NumberStr::new(
                     "2718281828459045235360287471352662497757247093699959574966967627"
-                )
+                ))
+            .to_string()
         )
+    }
+
+    #[test]
+    fn multiply_small_test() {
+        assert_eq!(
+            "1024",
+            (NumberStr::new("64") * NumberStr::new("16")).to_string()
+        )
+    }
+
+    #[test]
+    fn multiply_large_test() {
+        assert_eq!(
+            "97421969088",
+            (NumberStr::new("123456") * NumberStr::new("789123")).to_string()
+        )
+    }
+
+    #[test]
+    fn multiply_one_negative_test() {
+        assert!(NumberStr::new("1335") * NumberStr::new("-884") < NumberStr::new("0"))
+    }
+
+    #[test]
+    fn multiply_two_negative_test() {
+        assert!(NumberStr::new("-13335496") * NumberStr::new("-999988") > NumberStr::new("0"))
+    }
+
+    #[test]
+    fn midpoint_same_test() {
+        assert_eq!(3, midpoint(6, 6));
+    }
+
+    #[test]
+    fn midpoint_smaller_first_test() {
+        assert_eq!(6, midpoint(8, 26));
+    }
+
+    #[test]
+    fn midpoint_larger_first() {
+        assert_eq!(7, midpoint(200, 8));
+    }
+
+    #[test]
+    fn split_at_test() {
+        assert_eq!(
+            (NumberStr::new("123"), NumberStr::new("456")),
+            NumberStr::new("123456").split_at(3)
+        );
+    }
+
+    #[test]
+    fn flip_sign_pos_to_neg_test() {
+        assert_eq!(NumberStr::new("-123"), NumberStr::new("123").flip_sign());
+    }
+
+    #[test]
+    fn flip_sign_neg_to_pos_test() {
+        assert_eq!(NumberStr::new("123"), NumberStr::new("-123").flip_sign());
     }
 }
