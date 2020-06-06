@@ -166,6 +166,12 @@ impl From<&str> for NumberStr {
     }
 }
 
+impl From<i32> for NumberStr {
+    fn from(s: i32) -> Self {
+        Self::new(&s.to_string())
+    }
+}
+
 impl Into<String> for NumberStr {
     fn into(self) -> String {
         // available bc implemented `Display`
@@ -290,7 +296,7 @@ impl Add for NumberStr {
 }
 
 /// Implements multiplication using Karatsuba's Algorithm
-#[allow(suspicious_arithmetic_impl)]
+#[allow(clippy::suspicious_arithmetic_impl)]
 impl Mul for NumberStr {
     type Output = Self;
 
@@ -306,34 +312,33 @@ impl Mul for NumberStr {
             (true, false) => {
                 let multiplier = self.value.front().unwrap().digit as i32;
                 let sign = if rhs.positive == self.positive { 1 } else { -1 };
-                let len = rhs.len() as u32 - 1;
-                let result = NumberStr::new(
-                    &rhs.value
-                        .iter()
-                        .enumerate()
-                        .map(|(i, d)| {
-                            d.digit as i32 * multiplier * sign * 10i32.pow(len - i as u32)
-                        })
-                        .sum::<i32>()
-                        .to_string(),
-                );
+                let len = rhs.len() - 1;
+                let result = rhs
+                    .value
+                    .iter()
+                    .enumerate()
+                    .map(|(i, d)| {
+                        let mut d = (d.digit as i32 * multiplier * sign).to_string();
+                        d.push_str(&zeroes(len - i));
+                        NumberStr::new(&d)
+                    })
+                    .fold(NumberStr::from("0"), |acc, x| acc + x);
                 return result;
             }
             (false, true) => {
                 let multiplier = rhs.value.front().unwrap().digit as i32;
                 let sign = if rhs.positive == self.positive { 1 } else { -1 };
-                let len = self.len() as u32 - 1;
-                let result = NumberStr::new(
-                    &self
-                        .value
-                        .iter()
-                        .enumerate()
-                        .map(|(i, d)| {
-                            d.digit as i32 * multiplier * sign * 10i32.pow(len - i as u32)
-                        })
-                        .sum::<i32>()
-                        .to_string(),
-                );
+                let len = self.len() - 1;
+                let result = self
+                    .value
+                    .iter()
+                    .enumerate()
+                    .map(|(i, d)| {
+                        let mut d = (d.digit as i32 * multiplier * sign).to_string();
+                        d.push_str(&zeroes(len - i));
+                        NumberStr::new(&d)
+                    })
+                    .fold(NumberStr::from("0"), |acc, x| acc + x);
                 return result;
             }
             (false, false) => {}
@@ -341,14 +346,8 @@ impl Mul for NumberStr {
 
         // figure out where to split the integers
         let mid = midpoint(self.len(), rhs.len());
-        let mut b: VecDeque<Digit> = VecDeque::new();
-        let mut b2: VecDeque<Digit> = VecDeque::new();
-        for i in 0..(2 * mid) {
-            b2.push_front(Digit::new('0'));
-            if i < mid {
-                b.push_front(Digit::new('0'));
-            }
-        }
+        let mut b: VecDeque<Digit> = zeroes(mid).chars().map(Digit::new).collect();
+        let mut b2: VecDeque<Digit> = zeroes(2 * mid).chars().map(Digit::new).collect();
 
         // calculate a0, a1, b0, b1
         let (len_s, len_r) = (self.len(), rhs.len());
@@ -368,6 +367,10 @@ impl Mul for NumberStr {
     }
 }
 
+fn zeroes(n: usize) -> String {
+    String::from("0").repeat(n)
+}
+
 fn midpoint(len1: usize, len2: usize) -> usize {
     let longer = if len1 > len2 { len1 } else { len2 };
     let shorter = if len1 < len2 { len1 } else { len2 };
@@ -382,7 +385,7 @@ fn midpoint(len1: usize, len2: usize) -> usize {
 
 #[cfg(test)]
 mod test {
-    use super::{midpoint, Digit, NumberStr, VecDeque};
+    use super::{midpoint, zeroes, Digit, NumberStr, VecDeque};
 
     #[test]
     fn new_numberstr_test() {
@@ -560,5 +563,10 @@ mod test {
     #[test]
     fn flip_sign_neg_to_pos_test() {
         assert_eq!(NumberStr::new("123"), NumberStr::new("-123").flip_sign());
+    }
+
+    #[test]
+    fn zeroes_test() {
+        assert_eq!("0000000000", zeroes(10usize));
     }
 }
